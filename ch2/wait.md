@@ -314,7 +314,40 @@ func (j *jitteredBackoffManagerImpl) Backoff() clock.Timer {
 
 ## Poll
 
+分为三个元语：
+- Poll : 接收timeout作为结束标记
+- WithContext： 是否接收context
+- Until： 不接收timeout，接收chan或者context作为结束标记
+- Infinite： 不接受任何结束方式，直到遇到错误或者执行成功
+- Immediate： 立即执行一次在进入重试过程
+
+外部接口：
+
+### PollImmediateInfiniteWithContext
+
+**参数** ：  (ctx context.Context, interval time.Duration, condition ConditionWithContextFunc) error
+
+1. 立即执行condition一次，如果condition返回失败或者返回成功，则直接返回结果
+2. 否则每interval执行一次condition函数，直到ctx被取消或者遇到如上所示的执行结果
+
+
+### PollImmediateInfinite
+**参数** ： (interval time.Duration, condition ConditionFunc) error
+
+如上所示代码的封装，只是`ctx为context.Background`
+
+### PollImmediate
+
+**参数**： (interval, timeout time.Duration, condition ConditionFunc) error
+
+1. 立即执行condition一次，如果condition返回失败或者返回成功，则直接返回结果
+2. 否则每interval执行一次condition函数，直到ctx被取消，或者timeout，或者遇到如上所示的执行结果
+
+
+
 ```go
+//返回一个函数，该函数返回一个chan，这个chan会定时收到事件
+//如果timeout为0 ，则需要通过ctx，关闭chan，防止go-routine泄漏
 func poller(interval, timeout time.Duration) WaitWithContextFunc {
 	return WaitWithContextFunc(func(ctx context.Context) <-chan struct{} {
 		ch := make(chan struct{})
@@ -354,6 +387,94 @@ func poller(interval, timeout time.Duration) WaitWithContextFunc {
 
 		return ch
 	})
+}
+```
+
+```go
+type ConditionWithContextFunc func(context.Context) (done bool, err error)
+//WaitForWithContext wait也就是poller驱动执行fn，直到ctx.Done 或者fn返回（true，nil）
+func WaitForWithContext(ctx context.Context, wait WaitWithContextFunc, fn ConditionWithContextFunc) error {
+	waitCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := wait(waitCtx)
+	for {
+		select {
+		case _, open := <-c:
+			ok, err := runConditionWithCrashProtectionWithContext(ctx, fn)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+			if !open {
+				return ErrWaitTimeout
+			}
+		case <-ctx.Done():
+			// returning ctx.Err() will break backward compatibility
+			return ErrWaitTimeout
+		}
+	}
+}
+
+//对于chan的封装，wait的封装
+func WaitFor(wait WaitFunc, fn ConditionFunc, done <-chan struct{}) error {
+	ctx, cancel := contextForChannel(done)
+	defer cancel()
+	return WaitForWithContext(ctx, wait.WithContext(), fn.WithContext())
+}
+
+//如果immediate为true，则立即执行一次，后面就基于wait驱动执行condition
+func poll(ctx context.Context, immediate bool, wait WaitWithContextFunc, condition ConditionWithContextFunc) error {
+	if immediate {
+		done, err := runConditionWithCrashProtectionWithContext(ctx, condition)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		// returning ctx.Err() will break backward compatibility
+		return ErrWaitTimeout
+	default:
+		return WaitForWithContext(ctx, wait, condition)
+	}
+}
+```
+
+## ExponentialBackoffWithContext
+
+```go
+//指数等待方式
+func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionFunc) error {
+	for backoff.Steps > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if ok, err := runConditionWithCrashProtection(condition); err != nil || ok {
+			return err
+		}
+
+		if backoff.Steps == 1 {
+			break
+		}
+
+		waitBeforeRetry := backoff.Step()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitBeforeRetry):
+		}
+	}
+
+	return ErrWaitTimeout
 }
 
 ```
