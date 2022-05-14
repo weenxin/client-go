@@ -6,7 +6,7 @@ kubectl 支持jsonpath输出：
 
 ### 创建测试pod
 
-创建一个pod: `kubectl create -f ./ch4/testdata/pod.yaml`
+创建一个pod: `kubectl create -f ./util/jsonpath/testdata/pod.yaml`
 
 获取json数据:  `kubectl get pod -o json`
 
@@ -115,7 +115,7 @@ effect:NoExecute        key:node.kubernetes.io/unreachable
 
 ## 代码使用
 
-[code](/ch4/jsonpath_test.go)
+[code](/util/jsonpath/jsonpath_test.go)
 
 
 ## 实现细节

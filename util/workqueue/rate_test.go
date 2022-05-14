@@ -1,4 +1,4 @@
-package ch1
+package workqueue
 
 import (
 	"context"

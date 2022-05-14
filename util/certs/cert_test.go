@@ -1,12 +1,9 @@
-package ch3
+package certs
 
 import (
-	"crypto/x509"
-	"fmt"
-	"k8s.io/client-go/util/cert"
 	cryptorand "crypto/rand"
 	"crypto/rsa"
-	"net"
+	"k8s.io/client-go/util/cert"
 	"testing"
 )
 

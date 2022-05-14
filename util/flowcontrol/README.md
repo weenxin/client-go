@@ -1,22 +1,21 @@
-# Retry
+# Retry 包
 
-`k8s.io/apimachinery/pkg/util/wait`
+## Wait
 
-## 做什么
+package :  `k8s.io/apimachinery/pkg/util/wait`
+
+### 做什么
 
 定时执行某类操作。
 - `给定context结束`
 - `给定stop chan结束`
 - 定时执行直到成功或者失败
 
+### 如何使用
+[retry_test](/util/flowcontrol/retry_test.go)
 
-## 如何使用
-
-[retry_test](./ch2/retry_test.go)
-
-## 如何实现
-
-###  Group
+### 如何实现
+####  Group
 
 ```go
 //  等同与WaitGroup
@@ -53,7 +52,7 @@ func (g *Group) Start(f func()) {
 
 ```
 
-### Backoff
+#### Backoff
 
 ```go
 // Backoff holds parameters applied to a Backoff function.
@@ -116,7 +115,7 @@ func Jitter(duration time.Duration, maxFactor float64) time.Duration {
 ```
 
 
-### Until
+#### Until
 
 ```go
 
@@ -198,7 +197,7 @@ func BackoffUntil(f func(), backoff BackoffManager, sliding bool, stopCh <-chan 
 
 ```
 
-### ExponentialBackoff
+#### ExponentialBackoff
 
 ```go
 
@@ -279,7 +278,7 @@ func ExponentialBackoff(backoff Backoff, condition ConditionFunc) error {
 
 ```
 
-### JitteredBackoffManager
+#### JitteredBackoffManager
 
 ```go
 
@@ -324,9 +323,7 @@ func (j *jitteredBackoffManagerImpl) Backoff() clock.Timer {
 
 ```
 
-### Poll
-
-分为三个元语：
+#### Poll
 
 
 ```go
@@ -430,7 +427,7 @@ func poll(ctx context.Context, immediate bool, wait WaitWithContextFunc, conditi
 }
 ```
 
-### ExponentialBackoffWithContext
+#### ExponentialBackoffWithContext
 
 ```go
 //指数等待方式
@@ -462,6 +459,288 @@ func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, conditi
 }
 
 ```
+
+# flowcontrol 包
+
+## Backoff
+
+### 如何使用
+
+[TestBackoff](/util/flowcontrol/backoff_test.go)
+
+### 实现逻辑
+
+
+#### 结构定义
+
+```go
+
+type backoffEntry struct {
+	backoff    time.Duration
+	lastUpdate time.Time
+}
+
+type Backoff struct {
+	sync.RWMutex //锁，保护perItemBackoff
+	Clock           clock.Clock //时钟
+	defaultDuration time.Duration // base时间
+	maxDuration     time.Duration // 最大时间
+	perItemBackoff  map[string]*backoffEntry //各个元素的backoff的情况
+	rand            *rand.Rand //rand种子
+
+	// maxJitterFactor adds jitter to the exponentially backed off delay.
+	// if maxJitterFactor is zero, no jitter is added to the delay in
+	// order to maintain current behavior.
+	maxJitterFactor float64 //抖动因子
+}
+```
+#### 对象构建
+
+```go
+//用于测试
+func NewFakeBackOff(initial, max time.Duration, tc *testingclock.FakeClock) *Backoff {
+	return newBackoff(tc, initial, max, 0.0)
+}
+
+//新建一个backoff， initial为初始时间， max为对最大backoff时间
+func NewBackOff(initial, max time.Duration) *Backoff {
+	return NewBackOffWithJitter(initial, max, 0.0)
+}
+//initial为初始时间， max为对最大backoff时间， maxJitterFactor为抖动时间
+func NewFakeBackOffWithJitter(initial, max time.Duration, tc *testingclock.FakeClock, maxJitterFactor float64) *Backoff {
+	return newBackoff(tc, initial, max, maxJitterFactor)
+}
+//initial为初始时间， max为对最大backoff时间， maxJitterFactor为抖动时间
+func NewBackOffWithJitter(initial, max time.Duration, maxJitterFactor float64) *Backoff {
+	clock := clock.RealClock{}
+	return newBackoff(clock, initial, max, maxJitterFactor)
+}
+
+func newBackoff(clock clock.Clock, initial, max time.Duration, maxJitterFactor float64) *Backoff {
+	var random *rand.Rand
+	if maxJitterFactor > 0 {
+		random = rand.New(rand.NewSource(clock.Now().UnixNano()))
+	}
+	return &Backoff{
+		perItemBackoff:  map[string]*backoffEntry{}, //保存对象backoff当前状态
+		Clock:           clock,
+		defaultDuration: initial,
+		maxDuration:     max,
+		maxJitterFactor: maxJitterFactor,
+		rand:            random,
+	}
+}
+```
+
+```go
+// 获取当前backoff时间，用于sleep，等待时间ok在执行具体动作
+func (p *Backoff) Get(id string) time.Duration {
+	p.RLock()
+	defer p.RUnlock()
+	var delay time.Duration
+	entry, ok := p.perItemBackoff[id]
+	if ok {
+		delay = entry.backoff
+	}
+	return delay
+}
+```
+
+```go
+// 本次动作执行失败，会调用Next，增加backoff时间
+func (p *Backoff) Next(id string, eventTime time.Time) {
+	p.Lock()
+	defer p.Unlock()
+	entry, ok := p.perItemBackoff[id]
+	if !ok || hasExpired(eventTime, entry.lastUpdate, p.maxDuration) {
+		entry = p.initEntryUnsafe(id)
+		entry.backoff += p.jitter(entry.backoff)
+	} else {
+		delay := entry.backoff * 2       // exponential
+		delay += p.jitter(entry.backoff) // add some jitter to the delay
+		entry.backoff = time.Duration(integer.Int64Min(int64(delay), int64(p.maxDuration)))
+	}
+	entry.lastUpdate = p.Clock.Now()
+}
+```
+
+```go
+//如果成功了，则reset该对象，reset backoff时间
+func (p *Backoff) Reset(id string) {
+	p.Lock()
+	defer p.Unlock()
+	delete(p.perItemBackoff, id)
+}
+```
+
+```go
+
+// Returns True if the elapsed time since eventTime is smaller than the current backoff window
+func (p *Backoff) IsInBackOffSince(id string, eventTime time.Time) bool {
+	p.RLock()
+	defer p.RUnlock()
+	entry, ok := p.perItemBackoff[id]
+	if !ok {
+		return false
+	}
+	if hasExpired(eventTime, entry.lastUpdate, p.maxDuration) {
+		return false
+	}
+	return p.Clock.Since(eventTime) < entry.backoff
+}
+
+// Returns True if time since lastupdate is less than the current backoff window.
+func (p *Backoff) IsInBackOffSinceUpdate(id string, eventTime time.Time) bool {
+	p.RLock()
+	defer p.RUnlock()
+	entry, ok := p.perItemBackoff[id]
+	if !ok {
+		return false
+	}
+	if hasExpired(eventTime, entry.lastUpdate, p.maxDuration) {
+		return false
+	}
+	return eventTime.Sub(entry.lastUpdate) < entry.backoff
+}
+
+```
+
+```go
+//删除时间过长，不需要追踪的对象
+func (p *Backoff) GC() {
+	p.Lock()
+	defer p.Unlock()
+	now := p.Clock.Now()
+	for id, entry := range p.perItemBackoff {
+		if now.Sub(entry.lastUpdate) > p.maxDuration*2 {
+			// GC when entry has not been updated for 2*maxDuration
+			delete(p.perItemBackoff, id)
+		}
+	}
+}
+
+//删除对象，有点向reset
+func (p *Backoff) DeleteEntry(id string) {
+	p.Lock()
+	defer p.Unlock()
+	delete(p.perItemBackoff, id)
+}
+
+```
+
+## Throttle
+
+### 如何使用
+
+[TestThrottle](/util/flowcontrol/throttle_test.go)
+
+
+### 实现逻辑
+
+#### 结构定义
+
+```go
+//乐观锁，可以尽量尝试获取lock
+type PassiveRateLimiter interface {
+	// TryAccept returns true if a token is taken immediately. Otherwise,
+	// it returns false.
+	TryAccept() bool
+	// Stop stops the rate limiter, subsequent calls to CanAccept will return false
+	Stop()
+	// QPS returns QPS of this rate limiter
+	QPS() float32
+}
+
+//悲观锁
+type RateLimiter interface {
+	PassiveRateLimiter
+	// Accept returns once a token becomes available.
+	// goroutine 会sleep到可以获取到锁的时间
+	Accept()
+	// Wait returns nil if a token is taken before the Context is done.
+	//等待到可以获取到令牌
+	Wait(ctx context.Context) error
+}
+
+type tokenBucketPassiveRateLimiter struct {
+	limiter *rate.Limiter //基于令牌桶实现
+	qps     float32 //令牌发送频率
+	clock   clock.PassiveClock //时钟
+}
+
+type tokenBucketRateLimiter struct {
+	tokenBucketPassiveRateLimiter //
+	clock Clock //需要等待，所以需要Sleep等待，clock.PassiveClock满足不了需求
+}
+```
+
+#### 新建对象
+
+```go
+
+// NewTokenBucketRateLimiterWithClock is identical to NewTokenBucketRateLimiter
+// but allows an injectable clock, for testing.
+func NewTokenBucketRateLimiterWithClock(qps float32, burst int, c Clock) RateLimiter {
+	limiter := rate.NewLimiter(rate.Limit(qps), burst)
+	return newTokenBucketRateLimiterWithClock(limiter, c, qps)
+}
+
+// NewTokenBucketPassiveRateLimiterWithClock is similar to NewTokenBucketRateLimiterWithClock
+// except that it returns a PassiveRateLimiter which does not have Accept() and Wait() methods
+// and uses a PassiveClock.
+func NewTokenBucketPassiveRateLimiterWithClock(qps float32, burst int, c clock.PassiveClock) PassiveRateLimiter {
+	limiter := rate.NewLimiter(rate.Limit(qps), burst)
+	return newTokenBucketRateLimiterWithPassiveClock(limiter, c, qps)
+}
+
+func newTokenBucketRateLimiterWithClock(limiter *rate.Limiter, c Clock, qps float32) *tokenBucketRateLimiter {
+	return &tokenBucketRateLimiter{
+		tokenBucketPassiveRateLimiter: *newTokenBucketRateLimiterWithPassiveClock(limiter, c, qps),
+		clock:                         c,
+	}
+}
+
+func newTokenBucketRateLimiterWithPassiveClock(limiter *rate.Limiter, c clock.PassiveClock, qps float32) *tokenBucketPassiveRateLimiter {
+	return &tokenBucketPassiveRateLimiter{
+		limiter: limiter,
+		qps:     qps,
+		clock:   c,
+	}
+}
+
+```
+
+#### 相关方法和实现
+
+```go
+//stop需要基于limiter做stop，limiter还不支持，因此什么都不做，看起来还是有些问题的
+func (tbprl *tokenBucketPassiveRateLimiter) Stop() {
+
+}
+
+func (tbprl *tokenBucketPassiveRateLimiter) QPS() float32 {
+	return tbprl.qps
+}
+//尝试获取，使用AllowN不等待
+func (tbprl *tokenBucketPassiveRateLimiter) TryAccept() bool {
+	return tbprl.limiter.AllowN(tbprl.clock.Now(), 1)
+}
+
+// Accept will block until a token becomes available
+// goroutine等待
+func (tbrl *tokenBucketRateLimiter) Accept() {
+	now := tbrl.clock.Now()
+	tbrl.clock.Sleep(tbrl.limiter.ReserveN(now, 1).DelayFrom(now))
+}
+//调用令牌桶的等待
+func (tbrl *tokenBucketRateLimiter) Wait(ctx context.Context) error {
+	return tbrl.limiter.Wait(ctx)
+}
+
+```
+
+
+
 
 
 
