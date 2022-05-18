@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -18,29 +19,30 @@ type ActionHandler struct{
 }
 
 func (handler *ActionHandler) OnAdd(obj interface{}) {
-	pod , ok  := obj.(*v1.Pod)
-	if !ok {
-		panic("wrong types")
+	accessor, err := meta.Accessor(obj)
+	if err != nil {
+		panic(err.Error())
 	}
-	fmt.Printf("object added : %s \n", pod.ObjectMeta.String() )
+	fmt.Printf("object added : %s, %s \n ", accessor.GetName() , informer.LastSyncResourceVersion())
 }
 func (handler *ActionHandler) OnUpdate(oldObj, newObj interface{}) {
-	pod , ok  := newObj.(*v1.Pod)
-	if !ok {
-		panic("wrong types")
+	accessor, err := meta.Accessor(newObj)
+	if err != nil {
+		panic(err.Error())
 	}
-	fmt.Printf("object updated : %s \n ", pod.ObjectMeta.String() )
+	fmt.Printf("object updated : %s, %s \n ", accessor.GetName() , informer.LastSyncResourceVersion())
 }
 
 func (handler *ActionHandler) OnDelete(obj interface{}) {
-	pod , ok  := obj.(*v1.Pod)
-	if !ok {
-		panic("wrong types")
+	accessor, err := meta.Accessor(obj)
+	if err != nil {
+		panic(err.Error())
 	}
-	fmt.Printf("object deleted : %s \n ", pod.ObjectMeta.String() )
+	fmt.Printf("object deleted : %s, %s \n ", accessor.GetName() , informer.LastSyncResourceVersion())
 }
 
 
+var informer cache.Controller
 
 
 func main() {
@@ -59,7 +61,7 @@ func main() {
 	// create the pod watcher
 	lw := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "pods", v1.NamespaceDefault, fields.Everything())
 
-	_, informer := cache.NewInformer(lw,&v1.Pod{},time.Minute,&ActionHandler{})
+	_, informer = cache.NewInformer(lw,&v1.Pod{},time.Minute,&ActionHandler{})
 	stopInformer  := make(chan struct{} )
 	go informer.Run(stopInformer)
 
