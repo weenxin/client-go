@@ -1,6 +1,6 @@
 # Cache
 
-[类拓扑](/tools/cache/images/class-tuopu.png)
+![类拓扑](/tools/cache/images/class-tuopu.png)
 
 
 
