@@ -37,24 +37,32 @@ func main() {
 		logger.Panicw("create rest client failed", "errr", err)
 	}
 
+	//新建sinker
 	sinker := typedv1core.EventSinkImpl{Interface: client.CoreV1().Events("")}
 
+	// 创建修改器，event最多1条，模拟合并操作
 	option := record.CorrelatorOptions{
 		MaxEvents: 1,
 	}
+	//创建broadcaster
 	broadcaster := record.NewBroadcasterWithCorrelatorOptions(option)
 
+	//写到APISserver
 	go broadcaster.StartRecordingToSink(&sinker)
+	// 写到日志
 	go broadcaster.StartLogging(logger.Infof)
+	// 事件监听
 	go broadcaster.StartEventWatcher(func(event *v1.Event) {
 		logger.Infow("watch message ", "event", event)
 	})
 
+	// 增加一个Recorder
 	recorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
 		Component: "test",
 		Host:      "weenxin",
 	})
 
+	// 创建一个pod
 	pod, err := createOrGetPod(client)
 
 	if err != nil {
@@ -63,6 +71,7 @@ func main() {
 	logger.Infow("pod details", "name", pod.Name)
 	//新建一个event，会到broadcaster的queue中，进而唤醒所有watch的go-routine，进而将信息发送到sinker中，存储到kubernetes
 	recorder.Eventf(pod, v1.EventTypeNormal, "test event record", "add", "message added %v", 1)
+	//新建一个event，会到broadcaster的queue中，进而唤醒所有watch的go-routine，进而将信息发送到sinker中，存储到kubernetes
 	recorder.Eventf(pod, v1.EventTypeNormal, "test event record", "add", "message added %v", 2)
 
 	//等到流程完成
