@@ -10,4 +10,6 @@ Kubernetes client go 源码阅读
 
 ## Tools
 - [cache](/tools/cache/README.md) ListWatcher, SharedIndexInformer,Controller
+- [cache](/tools/rest-client/README.md) rest-config rest-client resouce create/updated/delete
+- [cache](/tools/event-record/README.md) event broadcaster, sinker ,recorder
 

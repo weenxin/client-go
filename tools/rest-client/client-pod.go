@@ -63,6 +63,7 @@ func main() {
 	//程序退出时，删除pod
 	defer client.CoreV1().Pods(DefaultNamespace).Delete(context.Background(), PodName, meta_v1.DeleteOptions{})
 
+	//update pod
 	pod, err = client.CoreV1().Pods(DefaultNamespace).Get(context.Background(), PodName, meta_v1.GetOptions{})
 	if err != nil {
 		panic(fmt.Sprintf("can not get pod , err : %s", err))
@@ -77,7 +78,7 @@ func main() {
 	waitForPodReady(client)
 	fmt.Println("pod has been updated")
 
-	//测试listPod
+	//list Pod
 	pods, err := client.CoreV1().Pods(DefaultNamespace).List(context.Background(), meta_v1.ListOptions{
 		LabelSelector: labels.SelectorFromSet(map[string]string{ServiceName: PodName}).String(),
 	})
@@ -87,6 +88,7 @@ func main() {
 		fmt.Printf("pods[%d].name is %s \n", index, pod.Name)
 	}
 
+	//get logs
 	logCloseCh := make(chan struct{})
 	if len(pods.Items) > 0 {
 		pod := pods.Items[0]
@@ -111,6 +113,7 @@ func main() {
 		s.Close()
 	}
 
+	//exec
 	if len(pods.Items) > 0 {
 		execCloseCh := make(chan struct{})
 
@@ -136,9 +139,9 @@ func main() {
 				Stderr: os.Stderr,
 				Tty:    true,
 			})
-			//if err != nil {
-			//		t.Fatalf("exec stream failed , err : %s", err)
-			//	}
+			if err != nil {
+				panic(fmt.Sprintf("exec stream failed , err : %s", err))
+			}
 		}, time.Millisecond*100, execCloseCh)
 
 		time.Sleep(10 * time.Second)
