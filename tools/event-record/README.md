@@ -6,7 +6,7 @@
 
 ## 架构图
 
-![架构图](/tools/event-record/images/archtect.png])
+![架构图](/tools/event-record/images/archtect.png)
 
 ## 使用方式
 
