@@ -42,7 +42,7 @@ func main() {
 
 	// 创建修改器，event最多1条，模拟合并操作
 	option := record.CorrelatorOptions{
-		MaxEvents: 1,
+		MaxEvents: 2,
 	}
 	//创建broadcaster
 	broadcaster := record.NewBroadcasterWithCorrelatorOptions(option)
