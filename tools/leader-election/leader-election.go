@@ -71,6 +71,7 @@ func runLeaderElection(lock *resourcelock.LeaseLock, ctx context.Context, instan
 		RetryPeriod:     2 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(c context.Context) {
+				changeModeCh <- modeMaster
 				klog.Info("a leader start leading .")
 			},
 			OnStoppedLeading: func() {
@@ -80,7 +81,6 @@ func runLeaderElection(lock *resourcelock.LeaseLock, ctx context.Context, instan
 			OnNewLeader: func(leaderName string) {
 				if leaderName == instanceName {
 					klog.Info("I am leader!")
-					changeModeCh <- modeMaster
 					return
 				}
 				klog.Infof("%s is new leader ", leaderName)
